@@ -580,10 +580,11 @@ func (c placementManagerConfiguration) NewPlacementManager(
 	scope := instrumentOpts.MetricsScope()
 	iOpts := instrumentOpts.SetMetricsScope(scope.SubScope("placement-watcher"))
 	placementWatcherOpts := c.Watcher.NewOptions(store, iOpts)
+	placementWatcher := placement.NewPlacementsWatcher(placementWatcherOpts)
 	placementManagerOpts := aggregator.NewPlacementManagerOptions().
 		SetInstrumentOptions(instrumentOpts).
 		SetInstanceID(instanceID).
-		SetWatcherOptions(placementWatcherOpts)
+		SetWatcher(placementWatcher)
 	return aggregator.NewPlacementManager(placementManagerOpts), nil
 }
 

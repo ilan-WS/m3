@@ -63,9 +63,6 @@ type PlacementManager interface {
 	// Shards returns the current shards owned by the instance.
 	Shards() (shard.Shards, error)
 
-	// C returns a channel that can be used to subscribe for updates
-	C() <-chan struct{}
-
 	// Close closes the placement manager.
 	Close() error
 }
@@ -73,14 +70,12 @@ type PlacementManager interface {
 type placementManagerMetrics struct {
 	activePlacementErrors tally.Counter
 	instanceNotFound      tally.Counter
-	updates               tally.Counter
 }
 
 func newPlacementManagerMetrics(scope tally.Scope) placementManagerMetrics {
 	return placementManagerMetrics{
 		activePlacementErrors: scope.Counter("active-placement-errors"),
 		instanceNotFound:      scope.Counter("instance-not-found"),
-		updates:               scope.Counter("placement-updates"),
 	}
 }
 
@@ -101,22 +96,17 @@ type placementManager struct {
 
 	state   placementManagerState
 	metrics placementManagerMetrics
-	ch      chan struct{}
 }
 
 // NewPlacementManager creates a new placement manager.
 func NewPlacementManager(opts PlacementManagerOptions) PlacementManager {
 	instrumentOpts := opts.InstrumentOptions()
-	mgr := &placementManager{
-		nowFn:      opts.ClockOptions().NowFn(),
-		instanceID: opts.InstanceID(),
-		ch:         make(chan struct{}, 1),
-		metrics:    newPlacementManagerMetrics(instrumentOpts.MetricsScope()),
+	return &placementManager{
+		nowFn:            opts.ClockOptions().NowFn(),
+		instanceID:       opts.InstanceID(),
+		placementWatcher: opts.Watcher(),
+		metrics:          newPlacementManagerMetrics(instrumentOpts.MetricsScope()),
 	}
-	mgr.placementWatcher = placement.NewPlacementsWatcher(
-		opts.WatcherOptions().SetOnPlacementChangedFn(mgr.process))
-
-	return mgr
 }
 
 func (mgr *placementManager) Open() error {
@@ -130,12 +120,7 @@ func (mgr *placementManager) Open() error {
 		return err
 	}
 	mgr.state = placementManagerOpen
-
 	return nil
-}
-
-func (mgr *placementManager) C() <-chan struct{} {
-	return mgr.ch
 }
 
 func (mgr *placementManager) InstanceID() string {
@@ -257,11 +242,4 @@ func (mgr *placementManager) instanceFrom(placement placement.Placement) (placem
 		return nil, ErrInstanceNotFoundInPlacement
 	}
 	return instance, nil
-}
-
-func (mgr *placementManager) process(_, _ placement.Placement) {
-	select {
-	case mgr.ch <- struct{}{}:
-	default:
-	}
 }

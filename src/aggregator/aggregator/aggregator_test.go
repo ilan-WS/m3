@@ -202,9 +202,8 @@ func TestAggregatorOpenInstanceNotInPlacement(t *testing.T) {
 	testPlacement := placement.NewPlacement().SetCutoverNanos(5678)
 
 	placementManager.EXPECT().Open().Return(nil)
-	placementManager.EXPECT().C().Return(make(chan struct{})).AnyTimes()
 	placementManager.EXPECT().InstanceID().Return(agg.opts.PlacementManager().InstanceID())
-	placementManager.EXPECT().Placement().Return(testPlacement, nil).AnyTimes()
+	placementManager.EXPECT().Placement().Return(testPlacement, nil)
 	placementManager.EXPECT().InstanceFrom(testPlacement).Return(nil, ErrInstanceNotFoundInPlacement)
 
 	require.NoError(t, agg.Open())
@@ -327,7 +326,7 @@ func TestAggregatorAddUntimedNotOpen(t *testing.T) {
 
 	agg, _ := testAggregator(t, ctrl)
 	err := agg.AddUntimed(testUntimedMetric, testStagedMetadatas)
-	require.Equal(t, errShardNotOwned, err)
+	require.Equal(t, errAggregatorNotOpenOrClosed, err)
 }
 
 func TestAggregatorAddUntimedNotResponsibleForShard(t *testing.T) {
@@ -367,8 +366,6 @@ func TestAggregatorAddUntimedSuccessWithPlacementUpdate(t *testing.T) {
 	require.NoError(t, agg.Open())
 	require.Equal(t, int64(testPlacementCutover), agg.currPlacement.CutoverNanos())
 
-	existingShard := agg.shards[3]
-
 	newShardAssignment := []shard.Shard{
 		shard.NewShard(0).SetState(shard.Initializing).SetCutoverNanos(5000).SetCutoffNanos(20000),
 		shard.NewShard(1).SetState(shard.Initializing).SetCutoverNanos(5500).SetCutoffNanos(25000),
@@ -390,6 +387,7 @@ func TestAggregatorAddUntimedSuccessWithPlacementUpdate(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	existingShard := agg.shards[3]
 	err = agg.AddUntimed(testUntimedMetric, testStagedMetadatas)
 	require.NoError(t, err)
 	require.Equal(t, 5, len(agg.shards))
@@ -416,15 +414,14 @@ func TestAggregatorAddUntimedSuccessWithPlacementUpdate(t *testing.T) {
 	}
 	require.Equal(t, 1, len(agg.shards[1].metricMap.entries))
 	require.Equal(t, newPlacementCutoverNanos, agg.currPlacement.CutoverNanos())
+
 	for {
 		existingShard.RLock()
 		closed := existingShard.closed
 		existingShard.RUnlock()
-
 		if closed {
 			break
 		}
-
 		time.Sleep(100 * time.Millisecond)
 	}
 }
@@ -435,7 +432,7 @@ func TestAggregatorAddTimedNotOpen(t *testing.T) {
 
 	agg, _ := testAggregator(t, ctrl)
 	err := agg.AddTimed(testTimedMetric, testTimedMetadata)
-	require.Equal(t, errShardNotOwned, err)
+	require.Equal(t, errAggregatorNotOpenOrClosed, err)
 }
 
 func TestAggregatorAddTimedNotResponsibleForShard(t *testing.T) {
@@ -479,8 +476,6 @@ func TestAggregatorAddTimedSuccessWithPlacementUpdate(t *testing.T) {
 	require.NoError(t, agg.Open())
 	require.Equal(t, int64(testPlacementCutover), agg.currPlacement.CutoverNanos())
 
-	existingShard := agg.shards[3]
-
 	newShardAssignment := []shard.Shard{
 		shard.NewShard(0).SetState(shard.Initializing).SetCutoverNanos(5000).SetCutoffNanos(20000),
 		shard.NewShard(1).SetState(shard.Initializing).SetCutoverNanos(5500).SetCutoffNanos(25000),
@@ -502,6 +497,7 @@ func TestAggregatorAddTimedSuccessWithPlacementUpdate(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	existingShard := agg.shards[3]
 	err = agg.AddTimed(testTimedMetric, testTimedMetadata)
 	require.NoError(t, err)
 	require.Equal(t, 5, len(agg.shards))
@@ -546,7 +542,7 @@ func TestAggregatorAddForwardedNotOpen(t *testing.T) {
 
 	agg, _ := testAggregator(t, ctrl)
 	err := agg.AddForwarded(testForwardedMetric, testForwardMetadata)
-	require.Equal(t, errShardNotOwned, err)
+	require.Equal(t, errAggregatorNotOpenOrClosed, err)
 }
 
 func TestAggregatorAddForwardedNotResponsibleForShard(t *testing.T) {
@@ -590,8 +586,6 @@ func TestAggregatorAddForwardedSuccessWithPlacementUpdate(t *testing.T) {
 	require.NoError(t, agg.Open())
 	require.Equal(t, int64(testPlacementCutover), agg.currPlacement.CutoverNanos())
 
-	existingShard := agg.shards[3]
-
 	newShardAssignment := []shard.Shard{
 		shard.NewShard(0).SetState(shard.Initializing).SetCutoverNanos(5000).SetCutoffNanos(20000),
 		shard.NewShard(1).SetState(shard.Initializing).SetCutoverNanos(5500).SetCutoffNanos(25000),
@@ -613,6 +607,7 @@ func TestAggregatorAddForwardedSuccessWithPlacementUpdate(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	existingShard := agg.shards[3]
 	err = agg.AddForwarded(testForwardedMetric, testForwardMetadata)
 	require.NoError(t, err)
 	require.Equal(t, 5, len(agg.shards))
@@ -1053,10 +1048,10 @@ func testAggregatorWithCustomPlacements(
 	ctrl *gomock.Controller,
 	proto *placementpb.PlacementSnapshots,
 ) (*aggregator, kv.Store) {
-	watcherOpts, store := testWatcherOptsWithPlacementProto(t, testPlacementKey, proto)
+	watcher, store := testWatcherWithPlacementProto(t, testPlacementKey, proto)
 	placementManagerOpts := NewPlacementManagerOptions().
 		SetInstanceID(testInstanceID).
-		SetWatcherOptions(watcherOpts)
+		SetWatcher(watcher)
 	placementManager := NewPlacementManager(placementManagerOpts)
 	opts := testOptions(ctrl).
 		SetEntryCheckInterval(0).
@@ -1065,11 +1060,11 @@ func testAggregatorWithCustomPlacements(
 }
 
 // nolint: unparam
-func testWatcherOptsWithPlacementProto(
+func testWatcherWithPlacementProto(
 	t *testing.T,
 	placementKey string,
 	proto *placementpb.PlacementSnapshots,
-) (placement.WatcherOptions, kv.Store) {
+) (placement.Watcher, kv.Store) {
 	t.Helper()
 	store := mem.NewStore()
 	_, err := store.SetIfNotExists(placementKey, proto)
@@ -1077,7 +1072,8 @@ func testWatcherOptsWithPlacementProto(
 	placementWatcherOpts := placement.NewWatcherOptions().
 		SetStagedPlacementKey(placementKey).
 		SetStagedPlacementStore(store)
-	return placementWatcherOpts, store
+	placementWatcher := placement.NewPlacementsWatcher(placementWatcherOpts)
+	return placementWatcher, store
 }
 
 // nolint: unparam

@@ -1124,9 +1124,10 @@ func (o DownsamplerOptions) newAggregatorPlacementManager(
 	placementWatcherOpts := placement.NewWatcherOptions().
 		SetStagedPlacementKey(placementKVKey).
 		SetStagedPlacementStore(localKVStore)
+	placementWatcher := placement.NewPlacementsWatcher(placementWatcherOpts)
 	placementManagerOpts := aggregator.NewPlacementManagerOptions().
 		SetInstanceID(instanceID).
-		SetWatcherOptions(placementWatcherOpts)
+		SetWatcher(placementWatcher)
 
 	return aggregator.NewPlacementManager(placementManagerOpts), nil
 }

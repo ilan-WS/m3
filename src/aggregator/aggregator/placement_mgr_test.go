@@ -123,30 +123,6 @@ func TestPlacementManagerPlacement(t *testing.T) {
 	require.Equal(t, []uint32{0, 1, 2, 3}, placement.Shards())
 }
 
-func TestPlacementManagerC(t *testing.T) {
-	mgr, store := testPlacementManager(t)
-	require.NoError(t, mgr.Open())
-	select {
-	case <-mgr.C():
-	case <-time.After(1 * time.Second):
-		t.Fatal("expected placement init to propagate within deadline")
-	}
-
-	require.Equal(t, 0, len(mgr.C()))
-	// Wait for change to propagate.
-	_, err := store.Set(testPlacementKey, testStagedPlacementProto)
-	require.NoError(t, err)
-	select {
-	case <-mgr.C():
-	case <-time.After(1 * time.Second):
-		t.Fatal("expected placement update to propagate within deadline")
-	}
-	placement, err := mgr.Placement()
-	require.NoError(t, err)
-	require.Equal(t, int64(10000), placement.CutoverNanos())
-	require.Equal(t, []uint32{0, 1, 2, 3}, placement.Shards())
-}
-
 func TestPlacementManagerInstanceNotFound(t *testing.T) {
 	mgr, store := testPlacementManager(t)
 	require.NoError(t, mgr.Open())
@@ -353,10 +329,10 @@ func TestPlacementClose(t *testing.T) {
 }
 
 func testPlacementManager(t *testing.T) (*placementManager, kv.Store) {
-	watcherOpts, store := testWatcherOptsWithPlacementProto(t, testPlacementKey, testStagedPlacementProto)
+	watcher, store := testWatcherWithPlacementProto(t, testPlacementKey, testStagedPlacementProto)
 	opts := NewPlacementManagerOptions().
 		SetInstanceID(testInstanceID).
-		SetWatcherOptions(watcherOpts)
+		SetWatcher(watcher)
 	placementManager := NewPlacementManager(opts).(*placementManager)
 	return placementManager, store
 }
