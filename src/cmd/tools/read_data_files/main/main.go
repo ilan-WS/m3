@@ -25,6 +25,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -146,7 +148,9 @@ func main() {
 	}
 
 	annotationProto := &annotation2.Payload{}
-	annotationCounts := make(map[string]int)
+	seriesTypes := make(map[string]map[string][]string)
+
+	re, _ := regexp.Compile(`__name__="(.*?)"`)
 
 	for {
 		entry, err := reader.StreamingRead()
@@ -170,24 +174,22 @@ func main() {
 			iter := m3tsz.NewReaderIterator(xio.NewBytesReader64(data), true, encodingOpts)
 			if iter.Next() {
 				_, _, annotation := iter.Current()
-				//if benchMode == benchmarkNone {
-				//	// Use fmt package so it goes to stdout instead of stderr
-				//	fmt.Printf("{id: %s, dp: %+v", id.String(), dp) // nolint: forbidigo
-				//	if len(annotation) > 0 {
-				//		fmt.Printf(", annotation: %s", // nolint: forbidigo
-				//			base64.StdEncoding.EncodeToString(annotation))
-				//	}
-				//	fmt.Println("}") // nolint: forbidigo
-				//}
 				annotationSizeTotal += uint64(len(annotation))
 				datapointCount++
 				annotationProto.Reset()
 				err := annotationProto.Unmarshal(annotation)
+				name := re.FindStringSubmatch(entry.ID.String())[1]
+				t := ""
 				if err != nil {
-					annotationCounts[err.Error()]++
+					t = err.Error()
 				} else {
-					annotationCounts[annotationProto.String()]++
+					t = annotationProto.String()
 				}
+				if _, ok := seriesTypes[name]; !ok {
+					seriesTypes[name] = make(map[string][]string)
+				}
+
+				seriesTypes[name][t] = append(seriesTypes[name][t], entry.ID.String())
 			}
 			if err := iter.Err(); err != nil {
 				log.Fatalf("unable to iterate original data: %v", err)
@@ -220,7 +222,48 @@ func main() {
 		log.Fatalf("unable to close reader: %v", err)
 	}
 
-	for s, count := range annotationCounts {
-		fmt.Printf("%s: %d\n", s, count)
+	names := make([]string, 0)
+	for s := range seriesTypes {
+		names = append(names, s)
+	}
+	sort.Strings(names)
+	fmt.Println("====================")
+	fmt.Println("SERIES WITH NO TYPES")
+	fmt.Println("====================")
+	for _, name := range names {
+		if _, ok := seriesTypes[name][""]; len(seriesTypes[name]) == 1 && ok {
+			fmt.Printf("%v\n", name)
+			sort.Strings(seriesTypes[name][""])
+			for _, id := range seriesTypes[name][""] {
+				fmt.Printf("  %v\n", id)
+			}
+			fmt.Println()
+		}
+	}
+
+	fmt.Println("=======================")
+	fmt.Println("SERIES WITH MIXED TYPES")
+	fmt.Println("=======================")
+	for _, name := range names {
+		if len(seriesTypes[name]) > 1 {
+			fmt.Printf("%v\n", name)
+			types := make([]string, 0)
+			for t := range seriesTypes[name] {
+				types = append(types, t)
+			}
+			sort.Strings(types)
+			for _, t := range types {
+				if len(t) == 0 {
+					fmt.Printf("  NO TYPE:\n")
+				} else {
+					fmt.Printf("  %v:\n", t)
+				}
+				sort.Strings(seriesTypes[name][t])
+				for _, id := range seriesTypes[name][""] {
+					fmt.Printf("    %v\n", id)
+				}
+				fmt.Println()
+			}
+		}
 	}
 }
