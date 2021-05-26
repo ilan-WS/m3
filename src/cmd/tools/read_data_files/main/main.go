@@ -148,9 +148,7 @@ func main() {
 	}
 
 	annotationProto := &annotation2.Payload{}
-	seriesTypes := make(map[string]map[string][]string)
-
-	re, _ := regexp.Compile(`__name__="(.*?)"`)
+	series := make(map[string]bool, 0)
 
 	for {
 		entry, err := reader.StreamingRead()
@@ -178,18 +176,15 @@ func main() {
 				datapointCount++
 				annotationProto.Reset()
 				err := annotationProto.Unmarshal(annotation)
-				name := re.FindStringSubmatch(entry.ID.String())[1]
+
 				t := ""
 				if err != nil {
-					t = err.Error()
+					fmt.Printf("error %v", err.Error())
 				} else {
 					t = annotationProto.String()
 				}
-				if _, ok := seriesTypes[name]; !ok {
-					seriesTypes[name] = make(map[string][]string)
-				}
 
-				seriesTypes[name][t] = append(seriesTypes[name][t], entry.ID.String())
+				series[entry.ID.String()] = series[entry.ID.String()] || (t != "")
 			}
 			if err := iter.Err(); err != nil {
 				log.Fatalf("unable to iterate original data: %v", err)
@@ -222,48 +217,59 @@ func main() {
 		log.Fatalf("unable to close reader: %v", err)
 	}
 
-	names := make([]string, 0)
-	for s := range seriesTypes {
-		names = append(names, s)
-	}
-	sort.Strings(names)
-	fmt.Println("====================")
-	fmt.Println("SERIES WITH NO TYPES")
-	fmt.Println("====================")
-	for _, name := range names {
-		if _, ok := seriesTypes[name][""]; len(seriesTypes[name]) == 1 && ok {
-			fmt.Printf("%v\n", name)
-			sort.Strings(seriesTypes[name][""])
-			for _, id := range seriesTypes[name][""] {
-				fmt.Printf("  %v\n", id)
+	groupedSeries := make(map[string]map[string][]string)
+
+	nameRegex, _ := regexp.Compile(`__name__="(.*?)"`)
+	clusterRegex, _ := regexp.Compile(`chronosphere_k8s_cluster="(.*?)"`)
+	namespaceRegex, _ := regexp.Compile(`chronosphere_k8s_namespace="(.*?)"`)
+	kubeNamespaceRegex, _ := regexp.Compile(`namespace="(.*?)"`)
+
+	for id, hasType := range series {
+		if !hasType {
+			name := nameRegex.FindStringSubmatch(id)[1]
+			cluster := ""
+			if c := clusterRegex.FindStringSubmatch(id); len(c) == 2 {
+				cluster = c[1]
 			}
-			fmt.Println()
+			namespace := ""
+			if n := namespaceRegex.FindStringSubmatch(id); len(n) == 2 {
+				namespace = n[1]
+			} else if n = kubeNamespaceRegex.FindStringSubmatch(id); len(n) == 2 {
+				namespace = n[1]
+			}
+
+			clusterWithNamespace := fmt.Sprintf("%v/%v", cluster, namespace)
+
+			if _, ok := groupedSeries[clusterWithNamespace]; !ok {
+				groupedSeries[clusterWithNamespace] = make(map[string][]string)
+			}
+
+			groupedSeries[clusterWithNamespace][name] = append(groupedSeries[clusterWithNamespace][name], id)
 		}
 	}
 
-	fmt.Println("=======================")
-	fmt.Println("SERIES WITH MIXED TYPES")
-	fmt.Println("=======================")
-	for _, name := range names {
-		if len(seriesTypes[name]) > 1 {
-			fmt.Printf("%v\n", name)
-			types := make([]string, 0)
-			for t := range seriesTypes[name] {
-				types = append(types, t)
+	clustersWithNamespaces := make([]string, 0)
+	for s := range groupedSeries {
+		clustersWithNamespaces = append(clustersWithNamespaces, s)
+	}
+	sort.Strings(clustersWithNamespaces)
+	for _, n := range clustersWithNamespaces {
+		fmt.Println(n)
+
+		names := make([]string, 0)
+		for name, _ := range groupedSeries[n] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			fmt.Printf("\t%v\n", name)
+			sort.Strings(groupedSeries[n][name])
+
+			for _, id := range groupedSeries[n][name] {
+				fmt.Printf("\t\t%v\n", id)
 			}
-			sort.Strings(types)
-			for _, t := range types {
-				if len(t) == 0 {
-					fmt.Printf("  NO TYPE:\n")
-				} else {
-					fmt.Printf("  %v:\n", t)
-				}
-				sort.Strings(seriesTypes[name][t])
-				for _, id := range seriesTypes[name][""] {
-					fmt.Printf("    %v\n", id)
-				}
-				fmt.Println()
-			}
+			fmt.Println()
 		}
 	}
 }
